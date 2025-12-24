@@ -12,6 +12,7 @@ VK_VOLUME_UP = 0xAF
 VK_VOLUME_DOWN = 0xAE
 
 com_initialized = False
+volume_adjustment_lock = threading.Lock()
 
 def ensure_com_initialized():
     global com_initialized
@@ -20,26 +21,33 @@ def ensure_com_initialized():
         com_initialized = True
 
 def get_spotify_volume():
-    ensure_com_initialized()
-    sessions = AudioUtilities.GetAllSessions()
-    for session in sessions:
-        if session.Process and session.Process.name() == "Spotify.exe":
-            volume = session._ctl.QueryInterface(ISimpleAudioVolume)
-            return volume
+    try:
+        ensure_com_initialized()
+        sessions = AudioUtilities.GetAllSessions()
+        for session in sessions:
+            if session.Process and session.Process.name() == "Spotify.exe":
+                volume = session._ctl.QueryInterface(ISimpleAudioVolume)
+                return volume
+    except Exception:
+        pass
     return None
 
 def adjust_spotify_volume(direction):
-    volume = get_spotify_volume()
-    if volume:
-        current = volume.GetMasterVolume()
-        step = 0.02
-        
-        if direction == "up":
-            new_volume = min(1.0, current + step)
-        else:
-            new_volume = max(0.0, current - step)
-        
-        volume.SetMasterVolume(new_volume, None)
+    with volume_adjustment_lock:
+        volume = get_spotify_volume()
+        if volume:
+            try:
+                current = volume.GetMasterVolume()
+                step = 0.02
+                
+                if direction == "up":
+                    new_volume = min(1.0, current + step)
+                else:
+                    new_volume = max(0.0, current - step)
+                
+                volume.SetMasterVolume(new_volume, None)
+            except Exception:
+                pass
 
 class KBDLLHOOKSTRUCT(ctypes.Structure):
     _fields_ = [
@@ -56,10 +64,10 @@ def low_level_keyboard_handler(nCode, wParam, lParam):
         
         if wParam == WM_KEYDOWN:
             if kb.vkCode == VK_VOLUME_UP:
-                adjust_spotify_volume("up")
+                threading.Thread(target=adjust_spotify_volume, args=("up",), daemon=True).start()
                 return 1
             elif kb.vkCode == VK_VOLUME_DOWN:
-                adjust_spotify_volume("down")
+                threading.Thread(target=adjust_spotify_volume, args=("down",), daemon=True).start()
                 return 1
     
     return user32.CallNextHookEx(None, nCode, wParam, lParam)
